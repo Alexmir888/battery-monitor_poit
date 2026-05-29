@@ -1,0 +1,16 @@
+# Citlivé konfiguračné súbory 
+firmware/config.h
+config.h
+
+# Databáza a logy 
+measurements.db
+log.csv
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS súbory
+.DS_Store
+Thumbs.db

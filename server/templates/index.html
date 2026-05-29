@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <title>IoT Monitorovanie batérií</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.rawgit.com/Mikhus/canvas-gauges/gh-pages/download/2.1.7/radial/gauge.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 20px; text-align: center; }
+        .panel { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn { padding: 10px 20px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; transition: 0.2s;}
+        .btn:hover { opacity: 0.8; }
+        .btn-open { background-color: #007bff; } .btn-start { background-color: #28a745; }
+        .btn-stop { background-color: #ffc107; color: black; } .btn-close { background-color: #dc3545; }
+        .btn-relay { background-color: #6f42c1; } .btn-tab { background-color: #333; font-size: 16px;}
+        
+        .gauges-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 30px; }
+        .gauge-wrapper { display: flex; flex-direction: column; align-items: center; }
+        
+        /* Battery indicator styles */
+        .bat-status { padding: 5px 15px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 10px; min-width: 100px; text-align: center; transition: background-color 0.3s; }
+        .status-charged { background-color: #28a745; color: white; box-shadow: 0 0 10px #28a745; }
+        .status-charging { background-color: #ffc107; color: black; animation: blinker 1s linear infinite; }
+        .status-disconnected { background-color: #dc3545; color: white; text-decoration: line-through; opacity: 0.7; }
+        @keyframes blinker { 50% { opacity: 0.3; } }
+
+        .charts-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .chart-box { background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 10px; }
+        canvas { max-width: 100%; }
+        
+        /* Styles for tabs and table */
+        .tab-content { display: none; }
+        .active-tab { display: block; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #333; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        
+        .filter-container { margin-bottom: 15px; display: flex; justify-content: center; gap: 15px; align-items: center; }
+        .filter-container input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <h2>IoT Monitorovanie batérií</h2>
+
+    <div>
+        <button class="btn btn-tab" onclick="switchTab('live-tab')">Monitorovanie (Live)</button>
+        <button class="btn btn-tab" onclick="switchTab('history-tab')">História (Databáza)</button>
+    </div>
+
+    <div id="live-tab" class="tab-content active-tab">
+        <div class="panel">
+            <h3>Ovládanie systému</h3>
+            <button class="btn btn-open" onclick="sendCommand('open')">Otvoriť</button>
+            <button class="btn btn-start" onclick="sendCommand('start')">Štart</button>
+            <button class="btn btn-stop" onclick="sendCommand('stop')">Stop</button>
+            <button class="btn btn-close" onclick="sendCommand('close')">Zatvoriť</button>
+            <p>Stav: <span id="status-text" style="font-weight: bold; color: red;">Zatvorené</span></p>
+        </div>
+
+        <div class="panel">
+            <h3>Ovládanie relé</h3>
+            <button class="btn btn-relay" onclick="sendRelay(1)">Relé 1</button>
+            <button class="btn btn-relay" onclick="sendRelay(2)">Relé 2</button>
+            <button class="btn btn-relay" onclick="sendRelay(3)">Relé 3</button>
+            <button class="btn btn-relay" onclick="sendRelay(4)">Relé 4</button>
+            <button class="btn btn-relay" onclick="sendRelay(5)">Relé 5</button>
+            <button class="btn btn-relay" onclick="sendRelay(6)">Relé 6</button>
+        </div>
+
+        <div class="panel">
+            <h3>Aktuálne napätie</h3>
+            <div class="gauges-container" id="gauges-container"></div>
+        </div>
+
+        <div class="panel">
+            <h3>Grafy v reálnom čase</h3>
+            <div class="charts-container">
+                <div class="chart-box"><canvas id="chart1"></canvas></div>
+                <div class="chart-box"><canvas id="chart2"></canvas></div>
+                <div class="chart-box"><canvas id="chart3"></canvas></div>
+                <div class="chart-box"><canvas id="chart4"></canvas></div>
+                <div class="chart-box"><canvas id="chart5"></canvas></div>
+                <div class="chart-box"><canvas id="chart6"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="history-tab" class="tab-content">
+        <div class="panel">
+            <h3>Historický graf</h3>
+            
+            <div class="filter-container">
+                <label>Od:</label>
+                <input type="datetime-local" id="filter-start">
+                <label>Do:</label>
+                <input type="datetime-local" id="filter-end">
+                <button class="btn btn-open" onclick="loadHistory()">Filtrovať</button>
+                <button class="btn btn-stop" onclick="resetFilter()">Reset</button>
+            </div>
+
+            <canvas id="historyChart" height="100"></canvas>
+        </div>
+
+        <div class="panel">
+            <h3>Tabuľka dát</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Čas</th>
+                        <th>Batéria 1 (V)</th><th>Batéria 2 (V)</th><th>Batéria 3 (V)</th>
+                        <th>Batéria 4 (V)</th><th>Batéria 5 (V)</th><th>Batéria 6 (V)</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        // ----------------- TABS LOGIC -----------------
+        function switchTab(tabId) {
+            document.getElementById('live-tab').classList.remove('active-tab');
+            document.getElementById('history-tab').classList.remove('active-tab');
+            document.getElementById(tabId).classList.add('active-tab');
+            
+            if (tabId === 'history-tab') {
+                loadHistory();
+            }
+        }
+
+        // ----------------- CONTROL AND LIVE -----------------
+        function sendCommand(action) { socket.emit('system_command', { action: action }); }
+        function sendRelay(num) { socket.emit('relay_command', { relay: num }); }
+
+        socket.on('state_changed', function(state) {
+            const statusEl = document.getElementById('status-text');
+            if (!state.is_open) { statusEl.innerText = "Zatvorené"; statusEl.style.color = "red"; } 
+            else if (state.is_open && !state.is_monitoring) { statusEl.innerText = "Otvorené (Čakanie)"; statusEl.style.color = "orange"; } 
+            else { statusEl.innerText = "Monitorovanie aktívne"; statusEl.style.color = "green"; }
+        });
+
+        // Initialize gauges with statuses
+        const gauges = [];
+        const gaugesContainer = document.getElementById('gauges-container');
+        
+        for (let i = 1; i <= 6; i++) {
+            let wrapper = document.createElement('div');
+            wrapper.className = 'gauge-wrapper';
+            
+            let statusBadge = document.createElement('div');
+            statusBadge.id = 'status-badge-' + i;
+            statusBadge.className = 'bat-status status-disconnected';
+            statusBadge.innerText = 'Odpojené';
+            
+            let canvas = document.createElement('canvas');
+            canvas.id = 'gauge' + i;
+            
+            wrapper.appendChild(statusBadge);
+            wrapper.appendChild(canvas);
+            gaugesContainer.appendChild(wrapper);
+
+            gauges[i] = new RadialGauge({
+                renderTo: 'gauge' + i, width: 150, height: 150, units: "V", title: "Bat " + i,
+                minValue: 0, maxValue: 5, majorTicks: ["0","1","2","3","4","5"], minorTicks: 2,
+                colorPlate: "#fff", borderShadowWidth: 0, borders: false, needleType: "arrow",
+                animationDuration: 1500, animationRule: "linear"
+            }).draw();
+        }
+
+        // Initialize Live Charts with "V"
+        const charts = [];
+        const chartColors = ['red', 'blue', 'green', 'orange', 'purple', 'brown'];
+        for (let i = 1; i <= 6; i++) {
+            const ctx = document.getElementById('chart' + i).getContext('2d');
+            charts[i] = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: 'Batéria ' + i + ' (V)', borderColor: chartColors[i-1], data: [], fill: false }] },
+                options: { animation: false, scales: { x: { display: false }, y: { min: 0, max: 5 } } }
+            });
+        }
+
+        // Update data, charts, and statuses
+        socket.on('update_data', function(msg) {
+            let timeLabel = new Date(msg.time * 1000).toLocaleTimeString('sk-SK');
+            
+            for (let i = 1; i <= 6; i++) {
+                let v = msg['v' + i];
+                gauges[i].value = v;
+                
+                // --- ANIMATION STATUS LOGIC ---
+                let badge = document.getElementById('status-badge-' + i);
+                if (v < 0.5) { // No battery (Less than 0.5 Volts)
+                    badge.className = 'bat-status status-disconnected';
+                    badge.innerText = 'Odpojené';
+                } else if (v >= 4.0) { // Fully charged (More than 4.0 Volts)
+                    badge.className = 'bat-status status-charged';
+                    badge.innerText = 'Nabitá';
+                } else { // Charging (from 0.5 to 4.0 Volts)
+                    badge.className = 'bat-status status-charging';
+                    badge.innerText = 'Nabíja sa';
+                }
+                
+                // Update charts
+                charts[i].data.labels.push(timeLabel);
+                charts[i].data.datasets[0].data.push(v);
+                if (charts[i].data.labels.length > 20) {
+                    charts[i].data.labels.shift(); charts[i].data.datasets[0].data.shift();
+                }
+                charts[i].update();
+            }
+        });
+
+        // ----------------- HISTORY (DATABASE) AND FILTERS -----------------
+        let histChart;
+
+        function resetFilter() {
+            document.getElementById('filter-start').value = '';
+            document.getElementById('filter-end').value = '';
+            loadHistory();
+        }
+
+        function loadHistory() {
+            let url = '/api/history';
+            
+            // Get dates from the filter
+            let startVal = document.getElementById('filter-start').value;
+            let endVal = document.getElementById('filter-end').value;
+
+            if (startVal && endVal) {
+                // Convert local time from input to UNIX timestamp for Python (seconds)
+                let startTs = new Date(startVal).getTime() / 1000;
+                let endTs = new Date(endVal).getTime() / 1000;
+                url += `?start=${startTs}&end=${endTs}`;
+            }
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    const tableBody = document.getElementById('history-table-body');
+                    tableBody.innerHTML = ''; 
+                    
+                    let labels = [];
+                    let datasets = [
+                        { label: 'Bat 1 (V)', borderColor: 'red', data: [], fill: false, tension: 0.1 },
+                        { label: 'Bat 2 (V)', borderColor: 'blue', data: [], fill: false, tension: 0.1 },
+                        { label: 'Bat 3 (V)', borderColor: 'green', data: [], fill: false, tension: 0.1 },
+                        { label: 'Bat 4 (V)', borderColor: 'orange', data: [], fill: false, tension: 0.1 },
+                        { label: 'Bat 5 (V)', borderColor: 'purple', data: [], fill: false, tension: 0.1 },
+                        { label: 'Bat 6 (V)', borderColor: 'brown', data: [], fill: false, tension: 0.1 }
+                    ];
+
+                    data.forEach(row => {
+                        let dateObj = new Date(row.time * 1000);
+                        let timeStr = dateObj.toLocaleDateString('sk-SK') + ' ' + dateObj.toLocaleTimeString('sk-SK');
+                        
+                        labels.push(timeStr);
+                        datasets[0].data.push(row.v1); datasets[1].data.push(row.v2); datasets[2].data.push(row.v3);
+                        datasets[3].data.push(row.v4); datasets[4].data.push(row.v5); datasets[5].data.push(row.v6);
+
+                        let tr = document.createElement('tr');
+                        tr.innerHTML = `<td>${timeStr}</td>
+                                        <td>${row.v1.toFixed(2)}</td><td>${row.v2.toFixed(2)}</td>
+                                        <td>${row.v3.toFixed(2)}</td><td>${row.v4.toFixed(2)}</td>
+                                        <td>${row.v5.toFixed(2)}</td><td>${row.v6.toFixed(2)}</td>`;
+                        tableBody.prepend(tr); // Add to the top
+                    });
+
+                    if (histChart) histChart.destroy();
+                    const ctxHist = document.getElementById('historyChart').getContext('2d');
+                    histChart = new Chart(ctxHist, {
+                        type: 'line',
+                        data: { labels: labels, datasets: datasets },
+                        options: { scales: { y: { min: 0, max: 5 } } }
+                    });
+                })
+                .catch(error => console.error("Chyba pri načítaní histórie:", error));
+        }
+    </script>
+</body>
+</html>
