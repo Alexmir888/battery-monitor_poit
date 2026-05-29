@@ -1,4 +1,4 @@
-# POIT Semestrálny projekt: IoT Monitorovanie batérií
+# POIT: IoT Monitorovanie batérií
 
 Vzdialené monitorovanie napätia 6 akumulátorov v reálnom čase s webovou vizualizáciou.
 
